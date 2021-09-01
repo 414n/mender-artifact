@@ -28,3 +28,6 @@ _testmain.go
 /mender-artifact
 /mender-artifact-darwin
 /mender-artifact-linux
+
+# Makefile flag files
+.*.make

@@ -12,6 +12,13 @@ PKGFILES = $(shell find . \( -path ./vendor -o -path ./Godeps \) -prune \
 PKGFILES_notest = $(shell echo $(PKGFILES) | tr ' ' '\n' | grep -v _test.go)
 GOCYCLO ?= 20
 
+DOCKER_IMAGE_NAME_BASE := $(PKGNAME)_build
+DOCKER_BUILD_FLAG_BASE := .$(DOCKER_IMAGE_NAME_BASE).make
+DOCKERFILE_BASE := Dockerfile
+DOCKER_IMAGE_NAME_NATIVES := $(PKGNAME)_natives_build
+DOCKER_BUILD_FLAG_NATIVES := .$(DOCKER_IMAGE_NAME_NATIVES).make
+DOCKERFILE_NATIVES := Dockerfile.binaries
+
 CGO_ENABLED=1
 export CGO_ENABLED
 
@@ -45,6 +52,15 @@ PLATFORMS := darwin linux windows
 
 GO_LDFLAGS_WIN = -ldflags "-X github.com/mendersoftware/mender-artifact/cli.Version=$(VERSION) -linkmode=internal -s -w -extldflags '-static' -extld=x86_64-w64-mingw32-gcc"
 
+$(DOCKER_BUILD_FLAG_BASE): TYPE=BASE
+$(DOCKER_BUILD_FLAG_BASE): $(DOCKERFILE_BASE)
+$(DOCKER_BUILD_FLAG_NATIVES): TYPE=NATIVES
+$(DOCKER_BUILD_FLAG_NATIVES): $(DOCKERFILE_NATIVES)
+
+$(DOCKER_BUILD_FLAG_NATIVES) $(DOCKER_BUILD_FLAG_BASE):
+	docker build -t $(DOCKER_IMAGE_NAME_$(TYPE)) -f $(DOCKERFILE_$(TYPE)) .
+	@touch $@
+
 build-natives:
 	@arch="amd64";
 	@echo "building mac";
@@ -57,17 +73,11 @@ build-natives:
 	@env GOOS=windows GOARCH=$$arch CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
 		$(GO) build $(GO_LDFLAGS_WIN) $(BUILDV) -tags $(TAGS) nolzma -o $(PKGNAME)-windows.exe ;
 
-build-contained:
-	rm -f mender-artifact && \
-	image_id=$$(docker build -f Dockerfile . | awk '/Successfully built/{print $$NF;}') && \
-	docker run --rm --entrypoint "/bin/sh" -v $(shell pwd):/binary $$image_id -c "cp /go/bin/mender-artifact /binary" && \
-	docker image rm $$image_id
+build-contained: $(DOCKER_BUILD_FLAG_BASE)
+	docker run --rm --entrypoint "/bin/sh" -u $$UID:$(shell id -g) -v $(shell pwd):/binary $(DOCKER_IMAGE_NAME_BASE) -c "cp /go/bin/$(PKGNAME) /binary"
 
-build-natives-contained:
-	rm -f mender-artifact && \
-	image_id=$$(docker build -f Dockerfile.binaries . | awk '/Successfully built/{print $$NF;}') && \
-	docker run --rm --entrypoint "/bin/sh" -v $(shell pwd):/binary $$image_id -c "cp /go/bin/mender-artifact* /binary" && \
-	docker image rm $$image_id
+build-natives-contained: $(DOCKER_BUILD_FLAG_NATIVES)
+	docker run --rm --entrypoint "/bin/sh" -u $$UID:$(shell id -g) -v $(shell pwd):/binary $(DOCKER_IMAGE_NAME_NATIVES) -c "cp /go/bin/$(PKGNAME)* /binary"
 
 goinstall:
 	@$(GO) install $(GO_LDFLAGS) $(BUILDV) $(BUILDTAGS)
@@ -91,6 +101,8 @@ clean:
 	rm -f mender-artifact-darwin mender-artifact-linux mender-artifact-windows.exe
 	rm -f coverage.txt coverage-tmp.txt
 	rm -f $(FINALEXE)
+	docker image rm $(DOCKER_IMAGE_NAME_BASE) $(DOCKER_IMAGE_NAME_NATIVES) || true
+	rm -f $(DOCKER_BUILD_FLAG_BASE) $(DOCKER_BUILD_FLAG_NATIVES)
 
 get-tools:
 	set -e ; for t in $(TOOLS); do \
